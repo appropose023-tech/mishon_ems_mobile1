@@ -16,141 +16,167 @@ workflows:
         - pattern: 'master'
 
     scripts:
+
       # ----------------------------------------------------
       # 1. BACKUP REPO SOURCE FILES DYNAMICALLY
       # ----------------------------------------------------
       - name: Backup repository
         script: |
           echo ">>> Locating and archiving working application state..."
+
           mkdir -p /tmp/repo/lib
-          
+
           REAL_LIB_DIR=$(find . -type d -name "lib" | grep -v "node_modules" | head -n 1)
           REAL_PUBSPEC=$(find . -type f -name "pubspec.yaml" | head -n 1)
-          
+
           if [ -n "$REAL_LIB_DIR" ]; then
             echo "Found lib folder at: $REAL_LIB_DIR"
             cp -R "$REAL_LIB_DIR/"* /tmp/repo/lib/
           else
-            echo "CRITICAL: lib folder not found in repository!"
-            exit 1;
+            echo "CRITICAL: lib folder not found!"
+            exit 1
           fi
-          
+
           if [ -n "$REAL_PUBSPEC" ]; then
             echo "Found pubspec.yaml at: $REAL_PUBSPEC"
             cp "$REAL_PUBSPEC" /tmp/repo/pubspec.yaml
           else
-            echo "CRITICAL: pubspec.yaml not found in repository!"
-            exit 1;
+            echo "CRITICAL: pubspec.yaml not found!"
+            exit 1
           fi
 
-          echo ">>> Purging local workspace to remove corrupted files..."
+          echo ">>> Cleaning workspace..."
           find . -mindepth 1 -maxdepth 1 -exec rm -rf {} \;
 
       # ----------------------------------------------------
-      # 2. SCAFFOLD FRESH MODERN ANDROID PIPELINE
+      # 2. CREATE FRESH FLUTTER ANDROID PROJECT
       # ----------------------------------------------------
       - name: Scaffold Flutter project
         script: |
-          echo ">>> Generating standard Flutter native container structure..."
-          flutter create --project-name mishon_ems_mobile --org com.example --platforms=android .
+          echo ">>> Creating fresh Flutter Android project..."
+          flutter create \
+            --project-name mishon_ems_mobile \
+            --org com.example \
+            --platforms=android .
 
       # ----------------------------------------------------
-      # 3. RESTORE SOURCE FILES AND AUTO-RESOLVE IMPORTS
+      # 3. RESTORE APP FILES
       # ----------------------------------------------------
       - name: Restore app source files
         script: |
-          echo ">>> Merging enterprise UI files and engine layers..."
+          echo ">>> Restoring source code..."
+
           rm -rf lib
           cp -R /tmp/repo/lib ./lib
 
-          echo ">>> Restoring production pubspec configuration file..."
           if [ -f /tmp/repo/pubspec.yaml ]; then
             cp /tmp/repo/pubspec.yaml ./pubspec.yaml
           fi
 
-          echo ">>> Auto-injecting missing state engine imports across components..."
-          if [ -f "lib/main.dart" ]; then
+          echo ">>> Injecting EMSStateEngine imports..."
+
+          if [ -f lib/main.dart ]; then
+            grep -q "app_state.dart" lib/main.dart || \
             sed -i '1s/^/import '\''app_state.dart'\'';\n/' lib/main.dart
           fi
 
-          find lib/screens/ -name "*.dart" -exec sed -i '1s/^/import '\''..\/app_state.dart'\'';\n/' {} \;
+          if [ -d lib/screens ]; then
+            find lib/screens -name "*.dart" -exec sh -c '
+              grep -q "app_state.dart" "$1" || \
+              sed -i "1s/^/import '\''..\/app_state.dart'\'';\n/" "$1"
+            ' _ {} \;
+          fi
 
           flutter pub get
 
       # ----------------------------------------------------
-      # 4. INJECT NATIVE ENGINE CONFIG & PROVEN MANIFEST
+      # 4. NETWORK SECURITY + MANIFEST
       # ----------------------------------------------------
       - name: Inject Android Network Configuration
         script: |
+          echo ">>> Creating network security configuration..."
+
           mkdir -p android/app/src/main/res/xml
 
-         cat << 'EOF' > android/app/src/main/res/xml/network_security_config.xml
-         <?xml version="1.0" encoding="utf-8"?>
-         <network-security-config>
-             <domain-config cleartextTrafficPermitted="true">
-                 <domain includeSubdomains="true">104.154.76.47</domain>
-                 <domain includeSubdomains="true">localhost</domain>
-                 <domain includeSubdomains="true">127.0.0.1</domain>
-            </domain-config>
-        </network-security-config>
-        EOF
+          cat > android/app/src/main/res/xml/network_security_config.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+              <domain-config cleartextTrafficPermitted="true">
+                  <domain includeSubdomains="true">104.154.76.47</domain>
+                  <domain includeSubdomains="true">localhost</domain>
+                  <domain includeSubdomains="true">127.0.0.1</domain>
+              </domain-config>
+          </network-security-config>
+          EOF
 
-        cat << 'EOF' > android/app/src/main/AndroidManifest.xml
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-            package="com.example.mishon_ems_mobile">
+          echo ">>> Writing AndroidManifest.xml..."
 
-            <uses-permission android:name="android.permission.INTERNET"/>
-            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+          cat > android/app/src/main/AndroidManifest.xml <<EOF
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.example.mishon_ems_mobile">
 
-            <application
-                android:name="${applicationName}"
-                android:label="Mishon EMS"
-                android:icon="@mipmap/ic_launcher"
-                android:usesCleartextTraffic="true"
-                android:networkSecurityConfig="@xml/network_security_config">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
-                <activity
-                    android:name=".MainActivity"
-                    android:exported="true"
-                    android:launchMode="singleTop"
-                    android:theme="@style/LaunchTheme"
-                    android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                    android:hardwareAccelerated="true"
-                    android:windowSoftInputMode="adjustResize">
+              <application
+                  android:name="\${applicationName}"
+                  android:label="Mishon EMS"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true"
+                  android:networkSecurityConfig="@xml/network_security_config">
 
-                    <meta-data
-                        android:name="io.flutter.embedding.android.NormalTheme"
-                        android:resource="@style/NormalTheme"/>
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
 
-                    <intent-filter>
-                       <action android:name="android.intent.action.MAIN"/>
-                       <category android:name="android.intent.category.LAUNCHER"/>
-                    </intent-filter>
-                </activity>
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme"/>
 
-                <meta-data
-                    android:name="flutterEmbedding"
-                    android:value="2"/>
-            </application>
-       </manifest>
-       EOF
-       - name: Verify Android Build Structure
-         script: |
-           echo "===== MAIN ACTIVITY ====="
-           find android -name MainActivity.kt
-           find android -name MainActivity.java
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
 
-           echo "===== LAUNCHER ICONS ====="
-           find android/app/src/main/res -name "*ic_launcher*"
+                  </activity>
 
-           echo "===== MANIFEST ====="
-           cat android/app/src/main/AndroidManifest.xml
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2"/>
+
+              </application>
+
+          </manifest>
+          EOF
+
       # ----------------------------------------------------
-      # 5. EXECUTE COMPILATION
+      # 4A. DIAGNOSTICS
+      # ----------------------------------------------------
+      - name: Verify Android Build Structure
+        script: |
+          echo "===== MAIN ACTIVITY ====="
+          find android -name MainActivity.kt
+          find android -name MainActivity.java
+
+          echo ""
+          echo "===== LAUNCHER ICONS ====="
+          find android/app/src/main/res -name "*ic_launcher*"
+
+          echo ""
+          echo "===== MANIFEST ====="
+          cat android/app/src/main/AndroidManifest.xml
+
+      # ----------------------------------------------------
+      # 5. BUILD APK
       # ----------------------------------------------------
       - name: Build APK
         script: |
-          echo ">>> Initiating release build generation..."
+          echo ">>> Building APK..."
           flutter pub get
           flutter build apk --release
 
