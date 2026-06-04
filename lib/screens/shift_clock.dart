@@ -1,97 +1,43 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'dart:async';
+import 'package:intl/intl.dart';
 import '../app_state.dart';
 
-class ShiftClockTerminalView extends StatefulWidget {
+class ShiftClockTerminalView extends StatelessWidget {
   const ShiftClockTerminalView({Key? key}) : super(key: key);
-
-  @override
-  State<ShiftClockTerminalView> createState() => _ShiftClockTerminalViewState();
-}
-
-class _ShiftClockTerminalViewState extends State<ShiftClockTerminalView> {
-  Timer? _timer;
-  int _elapsedMinutes = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      final state = Provider.of<EMSStateEngine>(context, listen: false);
-      if (state.activePunchInTime != null) {
-        setState(() {
-          _elapsedMinutes = DateTime.now().difference(state.activePunchInTime!).inMinutes;
-        });
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     final state = Provider.of<EMSStateEngine>(context);
-    bool punchedIn = state.activePunchInTime != null;
+    final bool isPunchedIn = state.activePunchInTime != null;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16.0),
+    return Padding(
+      padding: const EdgeInsets.all(24.0),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Card(
-            elevation: 4,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            child: Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: Column(
-                children: [
-                  const Text("⏱️ Operational Chrono Punch Gateway", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF004d4d))),
-                  const SizedBox(height: 16),
-                  Text(
-                    punchedIn ? "STATUS: SHIFT ACTIVE" : "STATUS: AWAITING PUNCH-IN",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: punchedIn ? Colors.green : Colors.red),
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: punchedIn ? Colors.red : const Color(0xFF008080),
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                    ),
-                    onPressed: () => state.toggleShiftPunch(!punchedIn),
-                    child: Text(punchedIn ? "EXECUTE SHIFT PUNCH-OUT" : "EXECUTE SHIFT PUNCH-IN", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  ),
-                ],
-              ),
+          Icon(isPunchedIn ? Icons.timer : Icons.timer_off, size: 100, color: isPunchedIn ? const Color(0xFF008080) : Colors.grey),
+          const SizedBox(height: 24),
+          Text(
+            isPunchedIn 
+              ? "Shift Active Since:\n${DateFormat('yyyy-MM-dd HH:mm:ss').format(state.activePunchInTime!)}" 
+              : "Awaiting Shift Verification Sequence",
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF004d4d)),
+          ),
+          const SizedBox(height: 48),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isPunchedIn ? Colors.amber[800] : const Color(0xFF008080),
+              padding: const EdgeInsets.symmetric(vertical: 20),
+            ),
+            onPressed: () => state.toggleShiftPunch(!isPunchedIn),
+            child: Text(
+              isPunchedIn ? "EXECUTE SHIFT PUNCH-OUT" : "EXECUTE SHIFT PUNCH-IN",
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
             ),
           ),
-          if (punchedIn) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFFBEB),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0xFFFBBF24)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.warning, color: Color(0xFFD97706)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      "HOURLY TRACKING ALERT: Shift active for $_elapsedMinutes minutes. Maintain active logs in execution floor sub-systems.",
-                      style: const TextStyle(color: Color(0xFF92400E), fontWeight: FontWeight.w600, fontSize: 13),
-                    ),
-                  ),
-                ],
-              ),
-            )
-          ]
         ],
       ),
     );
