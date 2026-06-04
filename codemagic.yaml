@@ -134,7 +134,17 @@ workflows:
             </application>
        </manifest>
        EOF
+       - name: Verify Android Build Structure
+         script: |
+           echo "===== MAIN ACTIVITY ====="
+           find android -name MainActivity.kt
+           find android -name MainActivity.java
 
+           echo "===== LAUNCHER ICONS ====="
+           find android/app/src/main/res -name "*ic_launcher*"
+
+           echo "===== MANIFEST ====="
+           cat android/app/src/main/AndroidManifest.xml
       # ----------------------------------------------------
       # 5. EXECUTE COMPILATION
       # ----------------------------------------------------
