@@ -1,191 +1,161 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'models.dart';
+import 'package:http/http.dart' as http;
+
+// Ensure these models mirror the fields inside your backend tables
+class UserProfile {
+  final String username;
+  final String role;
+  final String team;
+  final String segment;
+  UserProfile({required this.username, required this.role, required this.team, required this.segment});
+}
+
+class JobBatch {
+  final String batchNo;
+  final String jobName;
+  final String clientName;
+  final String projectName;
+  final int initialQty;
+  String status;
+  JobBatch({required this.batchNo, required this.jobName, required this.clientName, required this.projectName, required this.initialQty, required this.status});
+}
 
 class EMSStateEngine extends ChangeNotifier {
-  // Configured directly to your GCP infrastructure IP
-  final String baseUrl = "http://104.154.76.47:5030/api";
-  
+  final String baseUrl = "http://192.168.1.100:5030"; // Replace with your Flask backend server IP address
   UserProfile? currentUser;
-  DateTime? activePunchInTime;
-
+  String? activePunchInTime;
   List<JobBatch> batches = [];
-  List<LedgerEntry> materialLedger = [];
-  List<FloorTarget> targetingMatrix = [];
-  Map<String, Map<String, int>> processingCounters = {};
+  bool isLoading = false;
+
+  Future<void> fetchAndSyncFromBackend() async {
+    isLoading = true;
+    notifyListeners();
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/api/sync'));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List fetchedBatches = data['batches'];
+        batches = fetchedBatches.map((b) => JobBatch(
+          batchNo: b['batch_no'] ?? '',
+          jobName: b['job_name'] ?? '',
+          clientName: b['client_name'] ?? '',
+          projectName: b['project_name'] ?? '',
+          initialQty: b['initial_qty'] ?? 0,
+          status: b['status'] ?? 'OPEN',
+        )).toList();
+      }
+    } catch (e) {
+      debugPrint("Synchronization error pipeline down: $e");
+    }
+    isLoading = false;
+    notifyListeners();
+  }
 
   Future<bool> authenticateUser(String username, String password) async {
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
+        Uri.parse('$baseUrl/api/login'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({"username": username, "password": password}),
       );
-
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['success']) {
-          currentUser = UserProfile(
-            username: data['user']['username'],
-            role: data['user']['role'],
-            team: data['user']['team'] ?? "None",
-            segment: data['user']['segment'] ?? "None",
-          );
-          await syncOperationalData();
-          notifyListeners();
-          return true;
-        }
+        final data = json.decode(response.body);
+        final u = data['user'];
+        currentUser = UserProfile(
+          username: u['username'],
+          role: u['role'],
+          team: u['team'] ?? 'None',
+          segment: u['segment'] ?? 'None',
+        );
+        await fetchAndSyncFromBackend();
+        return true;
       }
     } catch (e) {
-      print("Auth Error: $e");
+      debugPrint("Authentication system network failure: $e");
     }
     return false;
   }
 
-  Future<void> syncOperationalData() async {
+  Future<bool> toggleShiftPunch(bool isPunchIn) async {
+    if (currentUser == null) return false;
     try {
-      final response = await http.get(Uri.parse('$baseUrl/sync'));
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/punch'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "username": currentUser!.username,
+          "action": isPunchIn ? "in" : "out"
+        }),
+      );
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        
-        batches = (data['batches'] as List).map((b) => JobBatch(
-          batchNo: b['batch_no'],
-          jobName: b['job_name'],
-          clientName: b['client_name'],
-          projectName: b['project_name'],
-          initialQty: b['initial_qty'],
-          status: b['status'],
-        )).toList();
-
-        materialLedger = (data['ledger'] as List).map((l) => LedgerEntry(
-          batchNo: l['batch_no'],
-          fromStage: l['from_stage'],
-          toStage: l['to_stage'],
-          qtyTransferred: l['qty_transferred'],
-          timestamp: DateTime.parse(l['entry_timestamp']),
-          operator: l['operator_username'],
-          comments: l['comments'] ?? "",
-        )).toList();
-
-        targetingMatrix = (data['targets'] as List).map((t) => FloorTarget(
-          batchNo: t['batch_no'],
-          segment: t['segment'],
-          team: t['team'],
-          targetQty: t['target_qty'],
-        )).toList();
-        
+        final data = json.decode(response.body);
+        activePunchInTime = isPunchIn ? data['time'] : null;
         notifyListeners();
+        return true;
       }
     } catch (e) {
-      print("Sync Error: $e");
+      debugPrint("Punch operation tracking failure: $e");
+    }
+    return false;
+  }
+
+  Future<String?> logHourlyStatus(String batchNo, String side, int qty, String comments) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/log_hourly'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "username": currentUser!.username,
+          "batch_no": batchNo,
+          "side": side,
+          "qty": qty,
+          "comments": comments,
+          "team": currentUser!.team,
+          "segment": currentUser!.segment
+        }),
+      );
+      final data = json.decode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        await fetchAndSyncFromBackend();
+        return null; // Null means success (no error message)
+      } else {
+        return data['message'] ?? "Validation failure on shopfloor log entry.";
+      }
+    } catch (e) {
+      return "Network connection issue reporting status data.";
+    }
+  }
+
+  Future<String?> executeLedgerTransfer(String batchNo, String fromStage, String toStage, int qty, String remarks) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/ledger_transfer'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "batch_no": batchNo,
+          "from_stage": fromStage,
+          "to_stage": toStage,
+          "qty": qty,
+          "operator": currentUser!.username,
+          "comments": remarks
+        }),
+      );
+      final data = json.decode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        await fetchAndSyncFromBackend();
+        return null;
+      } else {
+        return data['message'] ?? "Failed to authorize data transfer handshake transaction.";
+      }
+    } catch (e) {
+      return "Network structural communication failure.";
     }
   }
 
   void clearSession() {
     currentUser = null;
     activePunchInTime = null;
-    batches.clear();
-    materialLedger.clear();
-    targetingMatrix.clear();
-    notifyListeners();
-  }
-
-  Future<void> toggleShiftPunch(bool punchIn) async {
-    try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/punch'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'username': currentUser!.username,
-          'action': punchIn ? 'in' : 'out'
-        }),
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        activePunchInTime = punchIn ? DateTime.parse(data['time']) : null;
-        notifyListeners();
-      }
-    } catch (e) {
-      print("Punch Error: $e");
-    }
-  }
-
-  int getLayerRunningTotal(String batchNo, String side) {
-    return processingCounters[batchNo]?[side] ?? 0;
-  }
-
-  Future<void> commitHourlyStatus(String batchNo, String side, int amount, String remarks) async {
-    try {
-      await http.post(
-        Uri.parse('$baseUrl/log_hourly'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'username': currentUser!.username,
-          'batch_no': batchNo,
-          'side': side,
-          'qty': amount,
-          'comments': remarks,
-          'team': currentUser!.team,
-          'segment': currentUser!.segment
-        }),
-      );
-
-      if (!processingCounters.containsKey(batchNo)) {
-        processingCounters[batchNo] = {"TOP": 0, "BOTTOM": 0};
-      }
-      processingCounters[batchNo]![side] = (processingCounters[batchNo]![side] ?? 0) + amount;
-      notifyListeners();
-    } catch (e) {
-      print("Hourly Log Error: $e");
-    }
-  }
-
-  void closeBatchProcessingBlock(String batchNo) {
-    final idx = batches.indexWhere((element) => element.batchNo == batchNo);
-    if (idx != -1) {
-      batches[idx].status = 'CLOSED';
-      notifyListeners();
-    }
-  }
-
-  void dispatchBillingClearance(String batchNo) {
-    final idx = batches.indexWhere((element) => element.batchNo == batchNo);
-    if (idx != -1) {
-      batches[idx].status = 'DISPATCHED';
-      notifyListeners();
-    }
-  }
-
-  Future<void> injectLedgerTransaction({
-    required String batchNo,
-    required String fromStage,
-    required String toStage,
-    required int qty,
-    required String operator,
-    required String remarks,
-  }) async {
-    try {
-      await http.post(
-        Uri.parse('$baseUrl/ledger_transfer'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'batch_no': batchNo,
-          'from_stage': fromStage,
-          'to_stage': toStage,
-          'qty': qty,
-          'operator': operator,
-          'comments': remarks
-        }),
-      );
-      await syncOperationalData(); // Refresh ledger from DB
-    } catch (e) {
-      print("Ledger Error: $e");
-    }
-  }
-
-  void provisionNewTarget(String batchNo, String segment, String team, int targetQty) {
-    targetingMatrix.add(FloorTarget(batchNo: batchNo, segment: segment, team: team, targetQty: targetQty));
     notifyListeners();
   }
 }
