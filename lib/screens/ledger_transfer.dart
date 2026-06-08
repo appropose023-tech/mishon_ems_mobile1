@@ -16,6 +16,7 @@ class _InterDepartmentLedgerGatewayViewState extends State<InterDepartmentLedger
   String _toStage = "TH_PRODUCTION";
   final TextEditingController _qtyController = TextEditingController();
   final TextEditingController _remarksController = TextEditingController();
+  bool _isSubmitting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -24,9 +25,23 @@ class _InterDepartmentLedgerGatewayViewState extends State<InterDepartmentLedger
     final isManagement = (state.currentUser?.role == 'admin' || state.currentUser?.role == 'manager');
 
     if (openBatches.isEmpty) {
-      return const Center(child: Text("No manufacturing tracks present in current database state context."));
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24.0),
+          child: Text("No live active manufacturing tracks synced from Store Database pipeline configuration.", 
+               textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey)),
+        ),
+      );
     }
-    _batchNo ??= openBatches.first.batchNo;
+    
+    // Maintain reliable selection alignment loops
+    if (_batchNo == null || !openBatches.any((b) => b.batchNo == _batchNo)) {
+      _batchNo = openBatches.first.batchNo;
+    }
+
+    // Identify total volume ceiling rules for the selected batch tracking key
+    final activeBatchData = openBatches.firstWhere((b) => b.batchNo == _batchNo);
+    final int maxAllowedQty = activeBatchData.initialQty;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
@@ -34,18 +49,18 @@ class _InterDepartmentLedgerGatewayViewState extends State<InterDepartmentLedger
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (!isManagement) ...[
-            const Text("🔄 Dispatched Material Interlink Transaction Panel", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF004d4d))),
+            const Text("🔄 Material Interlink Dispatch Routing Terminal", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF004d4d))),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               value: _batchNo,
               decoration: const InputDecoration(labelText: "Target Traceability Batch Reference", border: OutlineInputBorder()),
-              items: openBatches.map((b) => DropdownMenuItem(value: b.batchNo, child: Text(b.batchNo))).toList(),
+              items: openBatches.map((b) => DropdownMenuItem(value: b.batchNo, child: Text("${b.batchNo} (${b.projectName}) [Max: ${b.initialQty}]"))).toList(),
               onChanged: (v) => setState(() => _batchNo = v),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               value: _fromStage,
-              decoration: const InputDecoration(labelText: "Origin Routing Terminal", border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: "Origin Routing Terminal Node", border: OutlineInputBorder()),
               items: ["SMT_PRODUCTION", "SMT_QUALITY", "TH_PRODUCTION", "TH_QUALITY"].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
               onChanged: (v) => setState(() => _fromStage = v!),
             ),
@@ -60,7 +75,11 @@ class _InterDepartmentLedgerGatewayViewState extends State<InterDepartmentLedger
             TextFormField(
               controller: _qtyController,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: "Verified Shipped Volume Quantities", border: OutlineInputBorder()),
+              decoration: InputDecoration(
+                labelText: "Verified Shipped Volume Quantities", 
+                helperText: "System maximum threshold value capacity: $maxAllowedQty units.",
+                border: const OutlineInputBorder()
+              ),
             ),
             const SizedBox(height: 12),
             TextFormField(
@@ -68,26 +87,53 @@ class _InterDepartmentLedgerGatewayViewState extends State<InterDepartmentLedger
               decoration: const InputDecoration(labelText: "Traceability Validation Sign-Off Reference Details", border: OutlineInputBorder()),
             ),
             const SizedBox(height: 16),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF008080)),
-              onPressed: () {
-                int q = int.tryParse(_qtyController.text) ?? 0;
-                if (q > 0) {
-                  state.injectLedgerTransaction(
-                    batchNo: _batchNo!,
-                    fromStage: _fromStage,
-                    toStage: _toStage,
-                    qty: q,
-                    operator: state.currentUser?.username ?? "System",
-                    remarks: _remarksController.text,
-                  );
-                  _qtyController.clear();
-                  _remarksController.clear();
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Traceability transactional token emitted successfully across chains.")));
-                }
-              },
-              child: const Text("EMIT SECURE LEDGER ROUTE ENTRY", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
+            _isSubmitting
+              ? const Center(child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF008080))))
+              : ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF008080)),
+                  onPressed: () async {
+                    int q = int.tryParse(_qtyController.text) ?? 0;
+                    
+                    // CRITICAL VALIDATION: Assert volume quantities do not cross limits
+                    if (q <= 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("Error: Operational quantities must be greater than zero."), backgroundColor: Colors.orange),
+                      );
+                      return;
+                    }
+
+                    if (q > maxAllowedQty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text("CRITICAL REJECTION: Requested units ($q) exceed initial Kit Issue bounds ($maxAllowedQty) for Batch $_batchNo."), 
+                          backgroundColor: Colors.red,
+                          duration: const Duration(seconds: 5),
+                        ),
+                      );
+                      return;
+                    }
+
+                    setState(() => _isSubmitting = true);
+                    await state.injectLedgerTransaction(
+                      batchNo: _batchNo!,
+                      fromStage: _fromStage,
+                      toStage: _toStage,
+                      qty: q,
+                      operator: state.currentUser?.username ?? "System Mobile UI",
+                      remarks: _remarksController.text,
+                    );
+                    
+                    _qtyController.clear();
+                    _remarksController.clear();
+                    setState(() => _isSubmitting = false);
+
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Traceability transactional token emitted successfully across chains."), backgroundColor: Colors.green)
+                    );
+                  },
+                  child: const Text("EMIT SECURE LEDGER ROUTE ENTRY", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
             const Divider(height: 32, thickness: 2),
           ],
           const Text("📋 Operational Tracking Ledger Historical Blocks", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF004d4d))),
